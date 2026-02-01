@@ -8,10 +8,10 @@ from PIL import Image
 import concurrent.futures
 
 # ==========================================
-# ページ設定 (必ず一番最初に書く)
+# ページ設定
 # ==========================================
 st.set_page_config(
-    page_title="致知読書感想文アプリ v4.3",
+    page_title="致知読書感想文アプリ v5.0",
     layout="wide",
     page_icon="📖"
 )
@@ -38,7 +38,6 @@ CHARS_PER_LINE = 40
 with st.sidebar:
     st.header("⚙️ 設定")
     
-    # API Key入力（secretsになければ入力欄表示）
     openai_key = st.secrets.get("OPENAI_API_KEY")
     if not openai_key:
         openai_key = st.text_input("OpenAI API Key", type="password")
@@ -47,7 +46,6 @@ with st.sidebar:
     if not google_key:
         google_key = st.text_input("Google API Key", type="password")
 
-    # Client初期化
     client = None
     if openai_key:
         try:
@@ -68,7 +66,6 @@ with st.sidebar:
     st.markdown("---")
     st.caption("🔧 OCRモデル設定")
     model_main = st.text_input("メインModel ID", value="gemini-3-flash-preview")
-    # サブモデルを Gemini 2.0 Flash Lite に設定 (2.5は存在しないため修正)
     model_sub = st.text_input("サブModel ID", value="gemini-2.0-flash-lite-preview-02-05")
 
     if st.button("🗑️ リセット"):
@@ -92,47 +89,38 @@ if "selected_article_key" not in st.session_state:
 # 関数定義
 # ==========================================
 def split_text(text, chunk_size):
-    """Excel用にテキストを指定文字数で分割"""
     if not text: return []
     clean_text = text.replace('\n', '　')
     return [clean_text[i:i+chunk_size] for i in range(0, len(clean_text), chunk_size)]
 
 def process_ocr_task_safe(label, pil_images, model_id):
     """
-    【並列処理用OCR関数】
-    画像を物理的に「上半分」と「下半分」に切り分けてからAIに渡すことで、
-    強制的に「上段→下段」の順序で読ませる。
+    【v5.0 修正版】並列処理用OCR関数
+    画像の物理分割を廃止し、AIのレイアウト認識能力を最大限活かすプロンプトに変更。
+    これにより、記事のカラムまたぎによる文章混在を防ぎます。
     """
     if not pil_images:
         return ""
     
     try:
         gemini_inputs = []
-        # プロンプト：分割された画像が順番に来ることを伝える
+        # プロンプト修正：レイアウト認識と記事ごとの読み取りを強調
         system_prompt = (
-            "あなたはOCRエンジンです。\n"
-            "これから雑誌『致知』のページを「上半分」と「下半分」に分割した画像が順番に送られます。\n"
-            "送られてきた画像の順番通りに（まず上段部分、次に下段部分）、文字を書き起こしてください。\n"
-            "縦書きの文章は、右行から左行へ読んでください。"
+            "あなたは高精度なOCRエンジンです。雑誌『致知』の紙面を読み取ります。\n"
+            "【重要ルール】\n"
+            "1. 画像全体を見て、レイアウト（段組み）を認識してください。\n"
+            "2. 記事のブロック（意味のまとまり）ごとに読み進めてください。\n"
+            "3. 縦書きの段組みがある場合、右の段から左の段へと順番に読み、段をまたいで一行として読まないように注意してください。\n"
+            "4. 複数の記事がある場合は、記事ごとに区切って出力してください。\n"
+            "5. 出力形式: [画像番号] <本文>..."
         )
         gemini_inputs.append(system_prompt)
         
-        # 画像を物理的に上下分割してリストに追加
+        # 画像をそのまま追加（物理カットしない）
         for i, img in enumerate(pil_images):
-            width, height = img.size
-            
-            # 上半分 (Top Half)
-            top_half = img.crop((0, 0, width, height // 2))
-            # 下半分 (Bottom Half)
-            bottom_half = img.crop((0, height // 2, width, height))
-            
-            # 順番通りに追加 (これでAIは上から読むしかなくなる)
-            gemini_inputs.append(f"\n\n[画像{i+1}枚目：上段エリア]\n")
-            gemini_inputs.append(top_half)
-            gemini_inputs.append(f"\n\n[画像{i+1}枚目：下段エリア]\n")
-            gemini_inputs.append(bottom_half)
+            gemini_inputs.append(f"\n\n[画像{i+1}枚目]\n")
+            gemini_inputs.append(img)
         
-        # モデル実行
         model = genai.GenerativeModel(model_id)
         response = model.generate_content(gemini_inputs)
         return response.text
@@ -141,7 +129,6 @@ def process_ocr_task_safe(label, pil_images, model_id):
         return f"[エラー: {label}の解析失敗: {e}]"
 
 def generate_draft(article_text, chat_context, target_len):
-    """感想文生成関数"""
     if not client:
         return "エラー: OpenAI APIキーが設定されていません。"
 
@@ -172,21 +159,17 @@ def generate_draft(article_text, chat_context, target_len):
 # ==========================================
 # メイン画面
 # ==========================================
-st.title("📖 致知読書感想文アプリ v4.3 (順序強制版)")
+st.title("📖 致知読書感想文アプリ v5.0 (レイアウト認識強化版)")
+st.caption("Step 1: 全体レイアウト解析OCR → Step 2: 記事選択・執筆 → Step 3: Excel出力")
 
-# エラーの原因となった箇所を修正（安全に記述）
-st.caption(
-    "Step 1: 画像分割並列OCR → Step 2: 記事選択・執筆 → Step 3: Excel出力"
-)
-
-tab1, tab2, tab3 = st.tabs(["1️⃣ 画像解析 (強制上下分割)", "2️⃣ 記事選択 & 執筆", "3️⃣ Excel出力"])
+tab1, tab2, tab3 = st.tabs(["1️⃣ 画像解析", "2️⃣ 記事選択 & 執筆", "3️⃣ Excel出力"])
 
 # ------------------------------------------------------------------
 # Tab 1: 並列OCR処理
 # ------------------------------------------------------------------
 with tab1:
     st.subheader("Step 1. 記事画像の読み込み")
-    st.info("画像を自動的に上下半分にカットし、「上段→下段」の順序でAIに読ませます。")
+    st.info("画像を分割せず、AIにレイアウト全体を認識させることで正確に読み取ります。")
 
     col1, col2, col3 = st.columns(3)
     with col1:
@@ -205,14 +188,14 @@ with tab1:
         elif not google_key:
             st.error("Google APIキーが設定されていません。")
         else:
-            with st.spinner("画像を上下に分割して解析中..."):
+            with st.spinner("レイアウトを解析して読み取っています..."):
                 try:
-                    # 画像を読み込み、PILオブジェクトのリストにする
+                    # PIL画像変換
                     images_main = [Image.open(f).convert("RGB") for f in files_main] if files_main else []
                     images_sub1 = [Image.open(f).convert("RGB") for f in files_sub1] if files_sub1 else []
                     images_sub2 = [Image.open(f).convert("RGB") for f in files_sub2] if files_sub2 else []
 
-                    # 並列処理の実行
+                    # 並列処理実行
                     with concurrent.futures.ThreadPoolExecutor() as executor:
                         future_main = executor.submit(process_ocr_task_safe, "メイン記事", images_main, model_main)
                         future_sub1 = executor.submit(process_ocr_task_safe, "記事2", images_sub1, model_sub)
