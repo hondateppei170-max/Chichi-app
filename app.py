@@ -12,8 +12,8 @@ st.caption("鈴木尚剛税理士事務所 | 社内木鶏会感想文生成ツ�
 try:
     # Streamlit CloudのSecretsからキーを取得
     genai.configure(api_key=st.secrets["GOOGLE_API_KEY"])
-    # モデルを「Pro」に変更（より高性能・安定）
-    model = genai.GenerativeModel('gemini-1.5-pro')
+    # モデルを「Flash」に設定（高速・安定・画像対応）
+    model = genai.GenerativeModel('gemini-1.5-flash')
 except Exception:
     st.error("⚠️ 設定エラー: APIキーが見つかりません。StreamlitのSettings > Secretsを確認してください。")
     st.stop()
@@ -32,7 +32,7 @@ with st.sidebar:
 # --- メイン機能 Step 1: 記事解析 ---
 st.info("雑誌『致知』の記事（画像またはPDF）をアップロードしてください。")
 
-# 画像とPDFの両方に対応させました
+# 画像とPDFの両方に対応
 uploaded_files = st.file_uploader(
     "ファイルを選択（複数可）", 
     type=['png', 'jpg', 'jpeg', 'pdf'], 
@@ -40,7 +40,7 @@ uploaded_files = st.file_uploader(
 )
 
 if uploaded_files and st.button("記事を解析する", type="primary"):
-    with st.spinner("Gemini Proが記事を読んでいます...（少々時間がかかります）"):
+    with st.spinner("Geminiが記事を読んでいます..."):
         try:
             # AIに渡すデータの準備
             prompt = "あなたはプロのライターです。提供された資料（雑誌記事）の「タイトル」と、300文字程度の「要約」を作成してください。"
