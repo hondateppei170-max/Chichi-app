@@ -11,7 +11,7 @@ import concurrent.futures
 # ページ設定
 # ==========================================
 st.set_page_config(
-    page_title="致知読書感想文アプリ v5.2",
+    page_title="致知読書感想文アプリ v5.4",
     layout="wide",
     page_icon="📖"
 )
@@ -95,7 +95,7 @@ def split_text(text, chunk_size):
 
 def process_ocr_task_safe(label, pil_images, model_id):
     """
-    【OCR関数】レイアウト認識強化版
+    【OCR関数】
     """
     if not pil_images:
         return ""
@@ -126,24 +126,18 @@ def process_ocr_task_safe(label, pil_images, model_id):
 
 def generate_draft(article_text, chat_context, target_len):
     """
-    【修正版】感想文生成関数
-    chat_context（壁打ち内容）の有無によって、プロンプトを完全に切り替える。
-    これにより「初稿での妄想」を防ぎ、「書き直し」での確実な反映を実現する。
+    【感想文生成関数】
     """
     if not client:
         return "エラー: OpenAI APIキーが設定されていません。"
 
-    # ====================================================
-    # パターンA: 初稿作成（チャットなし）
-    # ====================================================
+    # パターンA: 初稿作成
     if not chat_context:
         system_prompt = (
             "あなたは税理士事務所の職員です。\n"
             "雑誌『致知』の読書感想文（社内木鶏会用）の【初稿】を作成します。\n"
-            "以下の【ユーザーの過去の感想文】の文体や熱量を模倣し、"
-            "【記事の内容】をベースに感想文を書いてください。\n"
-            "**重要: まだ具体的なエピソードは入力されていないため、勝手に具体的な体験談を創作しないでください。**\n"
-            "業務への結びつけは「日々の業務において〜」といった一般的な表現に留めてください。"
+            "【ユーザーの過去の感想文】の文体を模倣し、【記事の内容】を要約・引用して感想文を構成してください。\n"
+            "**重要: まだ具体的なエピソードは入力されていません。「日々の業務において～」等の一般的な表現に留めてください。勝手な創作は禁止です。**"
         )
         user_content = (
             f"【今回選択した記事のOCRデータ】\n{article_text}\n\n"
@@ -151,28 +145,33 @@ def generate_draft(article_text, chat_context, target_len):
             "【執筆条件】\n"
             f"- 文字数：{target_len}文字前後\n"
             "- 文体：「です・ます」調\n"
-            "- 段落ごとに改行を入れること。\n"
-            "- 構成：①記事の引用・要約 ②一般的な業務への気づき（※創作エピソード禁止） ③今後の決意"
+            "- 構成：①記事の引用・要約 ②一般的な業務への気づき（※創作厳禁） ③今後の決意"
         )
 
-    # ====================================================
     # パターンB: 書き直し（壁打ち反映）
-    # ====================================================
     else:
         system_prompt = (
-            "あなたは税理士事務所の職員です。\n"
-            "読書感想文の【書き直し】を行います。\n"
-            "これまでの感想文（または記事内容）に、**【壁打ちチャットでの追加エピソード】を具体的に組み込んでください。**\n"
-            "抽象的だった「業務への気づき」の部分を、チャットで語られた「具体的な体験談」に完全に差し替えてください。"
+            "あなたはプロのライターです。読書感想文の【全面書き直し】を行います。\n"
+            "【重要指令】\n"
+            "ユーザーとの『壁打ちチャット』で語られた**具体的なエピソード**を、感想文のメインコンテンツとして採用してください。\n"
+            "初稿にあった「一般的な業務の話」は全て削除し、チャットの会話ログにある「固有名詞や具体的な出来事（いつ、誰が、どうした）」に差し替えてください。\n"
+            "**チャットの内容を反映していないと判断された場合、タスク失敗となります。**"
         )
         user_content = (
-            f"【記事データ】\n{article_text}\n\n"
-            f"【ユーザーの過去の感想文（文体見本）】\n{PAST_REVIEWS}\n\n"
-            f"【壁打ちチャットでの追加エピソード（※これを必ず書くこと※）】\n{chat_context}\n\n"
+            f"【最優先：壁打ちチャットの記録】\n"
+            f"=========================================\n"
+            f"{chat_context}\n"
+            f"=========================================\n"
+            f"↑ここに書かれているユーザーの体験談を必ず本文に組み込んでください。\n\n"
+            f"【参照する記事データ】\n{article_text}\n\n"
+            f"【文体サンプル】\n{PAST_REVIEWS}\n\n"
             "【執筆条件】\n"
             f"- 文字数：{target_len}文字前後\n"
             "- 文体：「です・ます」調\n"
-            "- 構成：①記事の引用 ②**チャットで出た具体的なエピソード** ③今後の決意\n"
+            "- 構成：\n"
+            "  1. 記事の感銘を受けた言葉の引用\n"
+            "  2. **チャットで語られた具体的なエピソード**（※ここを最も厚く書くこと）\n"
+            "  3. 今後の決意"
         )
     
     response = client.chat.completions.create(
@@ -185,7 +184,7 @@ def generate_draft(article_text, chat_context, target_len):
 # ==========================================
 # メイン画面
 # ==========================================
-st.title("📖 致知読書感想文アプリ v5.2 (初稿/リライト分離版)")
+st.title("📖 致知読書感想文アプリ v5.4 (強制更新版)")
 st.caption("Step 1: 全体レイアウト解析OCR → Step 2: 記事選択・執筆 → Step 3: Excel出力")
 
 tab1, tab2, tab3 = st.tabs(["1️⃣ 画像解析", "2️⃣ 記事選択 & 執筆", "3️⃣ Excel出力"])
@@ -265,40 +264,43 @@ with tab2:
     with col_draft:
         st.markdown("### 📝 感想文ドラフト")
         
-        # 初稿作成ボタン
+        # 初稿作成
         if st.button("🚀 初稿を作成する", disabled=(not selected_article_text)):
             if not client:
                  st.error("OpenAI APIキーがありません。")
             else:
-                with st.spinner("初稿を作成中（エピソードはまだ入れません）..."):
-                    # チャット履歴をリセット
+                with st.spinner("初稿を作成中..."):
                     st.session_state.chat_history = [] 
-                    # 第2引数をNoneにすることで「初稿モード」にする
                     draft = generate_draft(selected_article_text, None, target_length)
                     st.session_state.current_draft = draft
                     
-                    # AIからの最初の質問を履歴に追加
+                    # 【重要】テキストエリアの表示を強制的にリセット
+                    st.session_state["draft_area"] = draft 
+                    
                     st.session_state.chat_history.append({
                         "role": "assistant", 
-                        "content": "初稿を作成しました！\n今の段階では一般的な内容になっています。\n\n**この記事のテーマに関連して、あなたの業務で起きた具体的な出来事（成功・失敗・気づき）を教えてください。感想文に反映させます。**"
+                        "content": "初稿を作成しました！\n\n**この記事のテーマに関連して、あなたの業務で起きた具体的な出来事（成功・失敗・気づき）を教えてください。感想文に反映させます。**"
                     })
                     st.rerun()
         
         if st.session_state.current_draft:
+            # key="draft_area" を指定しているため、st.session_state["draft_area"] を更新する必要がある
             st.text_area("現在の原稿", st.session_state.current_draft, height=600, key="draft_area")
             
-            # 書き直しボタン
+            # 書き直し
             if st.button("🔄 チャットの内容を反映して書き直す", type="primary"):
-                if not st.session_state.chat_history:
-                    st.warning("まだチャットで会話していません。右側でエピソードを話してください。")
+                if len(st.session_state.chat_history) <= 1:
+                    st.warning("まだチャットでエピソードを話していません。")
                 else:
                     with st.spinner("チャットのエピソードを組み込んでリライト中..."):
-                        # チャット履歴を文字列化
                         chat_context = "\n".join([f"{m['role']}: {m['content']}" for m in st.session_state.chat_history])
                         
-                        # 第2引数にチャット内容を渡すことで「書き直しモード」にする
                         new_draft = generate_draft(selected_article_text, chat_context, target_length)
                         st.session_state.current_draft = new_draft
+                        
+                        # 【重要】ウィジェットの状態をコードから強制的に上書きする
+                        st.session_state["draft_area"] = new_draft 
+                        
                         st.success("書き直しました！")
                         st.rerun()
 
