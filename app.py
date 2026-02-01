@@ -99,32 +99,37 @@ if total_files > 0:
             try:
                 gemini_inputs = []
                 
-                # システムプロンプト（OCR特化）
-                # 複雑なインデントエラーを避けるため、変数で定義
+                # ==========================================
+                # プロンプト修正：上下2段組みの読み順を指定
+                # ==========================================
                 system_prompt_text = (
                     "あなたは、雑誌『致知』の紙面を完璧に読み取る高精度OCRエンジンです。\n"
-                    "提供された全ての画像から、文字を一字一句漏らさず、ありのままに書き起こしてください。\n\n"
-                    "【目的】\n"
-                    "後続の処理でGPT-4oが記事を解析し、正確な「引用（掲載位置付き）」を作成するための元データを作成する。\n\n"
-                    "【厳守ルール】\n"
-                    "1. 完全な文字起こし（要約禁止）:\n"
-                    "   - 要約や省略は一切禁止。書いてある文字を一字一句正確に書き起こすこと。\n"
-                    "   - 縦書き（右上から左下）の文章の流れを正しく認識すること。\n\n"
-                    "2. 位置情報のタグ付け（最重要）:\n"
-                    "   - 後で「1枚目 右段」と特定できるように、テキストの前に位置情報を付記すること。\n"
-                    "   - 画像ファイル名が判別できる場合は [ファイル名: xxx.jpg] と記載し、無理な場合は [画像N枚目] とする。\n\n"
-                    "3. 記事ごとの区切り:\n"
-                    "   - 提供される画像は複数の記事に分かれている場合があるため、入力データの区切り指示に従ってセクションを分けること。"
+                    "提供された画像は、基本的に「上下2段組み」のレイアウトになっています。\n"
+                    "以下の読み取り順序を厳守して書き起こしてください。\n\n"
+                    "【読み取り順序の絶対ルール】\n"
+                    "1. ページ構成の認識:\n"
+                    "   - 画像を「上半分（上段）」と「下半分（下段）」に分けて認識すること。\n"
+                    "2. 読み進める順番:\n"
+                    "   - まず、【上段】の文章を「右から左へ」全て読み取る。\n"
+                    "   - 次に、【下段】の文章を「右から左へ」全て読み取る。\n"
+                    "   - ※絶対に左側の段を上から下まで一気に読んではいけない（上下が混ざらないようにする）。\n\n"
+                    "【出力形式】\n"
+                    "各画像のテキストの前に、必ず以下の位置タグを付けること。\n"
+                    "   [画像N枚目]\n"
+                    "   <上段> ...ここに上段のテキスト...\n"
+                    "   <下段> ...ここに下段のテキスト...\n\n"
+                    "【その他のルール】\n"
+                    "   - 要約や省略は一切禁止。一字一句ありのままに書き起こす。\n"
+                    "   - 縦書き特有の「右上から始まり左下へ終わる」流れを守る。\n"
+                    "   - 画像ファイル名がわかる場合は [ファイル名: xxx.jpg] と記載する。"
                 )
                 gemini_inputs.append(system_prompt_text)
 
                 # 画像データの準備
                 for key, files in files_dict.items():
                     if files:
-                        # 名前順にソート
                         files.sort(key=lambda x: x.name)
                         
-                        # セクション区切りテキストを追加
                         if key == "main":
                             gemini_inputs.append("\n\n=== 【ここからメイン記事の画像】 ===\n")
                         elif key == "sub1":
@@ -132,23 +137,16 @@ if total_files > 0:
                         elif key == "sub2":
                             gemini_inputs.append("\n\n=== 【ここから記事3の画像】 ===\n")
                         
-                        # 画像を追加（エラー対策済み）
+                        # 画像を追加（安全策込み）
                         for img_file in files:
                             try:
-                                # 【重要】ポインタを先頭に戻す
                                 img_file.seek(0)
-                                
                                 image = Image.open(img_file)
-                                
-                                # RGB変換（AlphaチャンネルやCMYK対策）
                                 if image.mode != "RGB":
                                     image = image.convert("RGB")
-                                    
                                 gemini_inputs.append(image)
-                                
                             except Exception as img_err:
                                 st.error(f"画像読み込みエラー: {img_file.name} \n詳細: {img_err}")
-                                # 読み込めない画像があっても停止せず、次の画像へ進む
                                 continue
 
                 # Gemini モデル呼び出し
@@ -205,12 +203,12 @@ if st.session_state.extracted_text:
         else:
             with st.spinner("GPT-4oが執筆中..."):
                 try:
-                    # 執筆プロンプト（安全な結合）
+                    # 執筆プロンプト（位置情報を活用するよう指示）
                     ocr_data = st.session_state.extracted_text
                     
                     writer_prompt = (
                         "あなたは税理士事務所の職員です。\n"
-                        "以下の【OCR解析データ】は、雑誌『致知』の記事を文字起こししたものです。\n"
+                        "以下の【OCR解析データ】は、雑誌『致知』の記事（上下2段組み）を文字起こししたものです。\n"
                         "この内容を元に、社内木鶏会用の読書感想文を作成してください。\n\n"
                         "【OCR解析データ】\n"
                         f"{ocr_data}\n\n"
@@ -219,7 +217,7 @@ if st.session_state.extracted_text:
                         "   - メイン記事の内容を中心に要約する。\n"
                         "2. 印象に残った言葉（引用）\n"
                         "   - 解析データ内の原文を引用する際は、必ず正確に記述すること。\n"
-                        "   - 引用部分の後に、（〇〇記事 〇枚目 右段より）のように、解析データにある位置情報を元に出典元を記載すること。\n"
+                        "   - 引用部分の後に、（〇〇記事 〇枚目 上段より）（〇〇記事 〇枚目 下段より）のように、解析データのタグを元に出典元を記載すること。\n"
                         "3. 自分の業務への具体的な活かし方\n"
                         "   - 税理士補助・監査業務などの視点で、記事の教えをどう実践するか具体的に書く。\n\n"
                         "【執筆条件】\n"
@@ -254,16 +252,13 @@ if st.session_state.final_text:
             wb = load_workbook(uploaded_template)
             ws = wb.active
             
-            # 書き込み前のクリア
             for row in range(EXCEL_START_ROW, 100):
                 ws[f"A{row}"].value = None
             
-            # 分割書き込み
             lines = split_text(st.session_state.final_text, CHARS_PER_LINE)
             for i, line in enumerate(lines):
                 cell = ws[f"A{EXCEL_START_ROW + i}"]
                 cell.value = line
-                # スタイル調整
                 cell.alignment = Alignment(wrap_text=False, shrink_to_fit=True)
 
             out = io.BytesIO()
