@@ -122,4 +122,25 @@ if total_files > 0:
                 gemini_inputs.append(system_prompt)
 
                 # 画像データの準備
-                for key, files in files_dict
+                # ★修正箇所: .items() とコロンを確実に記述
+                for key, files in files_dict.items():
+                    if files:
+                        # 名前順にソート
+                        files.sort(key=lambda x: x.name)
+                        
+                        # セクション区切りテキストを追加
+                        if key == "main":
+                            gemini_inputs.append("\n\n=== 【ここからメイン記事の画像】 ===\n")
+                        elif key == "sub1":
+                            gemini_inputs.append("\n\n=== 【ここから記事2の画像】 ===\n")
+                        elif key == "sub2":
+                            gemini_inputs.append("\n\n=== 【ここから記事3の画像】 ===\n")
+                        
+                        # 画像を追加
+                        for img_file in files:
+                            image = Image.open(img_file)
+                            gemini_inputs.append(image)
+
+                # Gemini モデル呼び出し
+                try:
+                    model = genai.GenerativeModel(model_id_input)
