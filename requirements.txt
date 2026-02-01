@@ -1,3 +1,5 @@
 streamlit
 openai
 openpyxl
+google-generativeai
+Pillow
