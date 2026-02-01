@@ -123,7 +123,6 @@ if total_files > 0:
                 gemini_inputs.append(system_prompt)
 
                 # 各タブの画像を処理
-                # エラー回避のため、文字列の定義を修正
                 article_labels = {
                     "main": "\n\n=== 【ここからメイン記事の画像】 ===\n", 
                     "sub1": "\n\n=== 【ここから記事2の画像】 ===\n", 
@@ -182,35 +181,3 @@ if st.session_state.extracted_text:
         "OCR結果編集エリア", 
         st.session_state.extracted_text, 
         height=500
-    )
-    st.session_state.extracted_text = edited_text
-
-    # ==========================================
-    # Step 2: 感想文作成 (OpenAI)
-    # ==========================================
-    st.markdown("---")
-    st.header("Step 2. 感想文の執筆 (GPT-4o)")
-
-    if st.button("✍️ 税理士事務所員として感想文を書く"):
-        if not st.session_state.extracted_text:
-             st.error("解析データが空です。Step 1を実行してください。")
-        else:
-            with st.spinner("GPT-4oが執筆中..."):
-                try:
-                    writer_prompt = f"""
-                    あなたは税理士事務所の職員です。
-                    以下の【OCR解析データ】は、雑誌『致知』の記事を文字起こししたものです。
-                    この内容を元に、社内木鶏会用の読書感想文を作成してください。
-
-                    【OCR解析データ】
-                    {st.session_state.extracted_text}
-
-                    【構成】
-                    1. 記事の要約
-                       - メイン記事の内容を中心に要約する。
-                    
-                    2. 印象に残った言葉（引用）
-                       - 解析データ内の原文を引用する際は、必ず正確に記述すること。
-                       - 引用部分の後に、（〇〇記事 〇枚目 右段より）のように、解析データにある位置情報を元に出典元を記載すること。
-
-                    3
