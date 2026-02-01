@@ -6,15 +6,15 @@ import io
 import base64
 
 # --- ページ設定 ---
-st.set_page_config(page_title="致知読書感想文アプリ", layout="wide", page_icon="📖")
+st.set_page_config(page_title="致知読書感想文アプリ（厳格版）", layout="wide", page_icon="📖")
 st.title("📖 致知読書感想文作成アプリ")
-st.caption("Step 1：記事読み込み（引用抽出） → Step 2：感想文作成")
+st.caption("Step 1：正確な読み取り確認 → Step 2：感想文作成")
 
 # --- APIキーの設定 ---
 try:
     client = OpenAI(api_key=st.secrets["OPENAI_API_KEY"])
 except Exception:
-    st.error("⚠️ OpenAI APIキーが設定されていません。")
+    st.error("⚠️ OpenAI APIキーの設定が必要です。Secretsを確認してください。")
     st.stop()
 
 # --- 関数群 ---
@@ -35,29 +35,29 @@ with st.sidebar:
     target_length = st.selectbox("目標文字数", [300, 400, 500, 600, 700], index=1)
 
 # ==========================================
-# Step 1: 記事の読み込み
+# Step 1: 記事の厳格な読み取り
 # ==========================================
-st.header("Step 1. 記事画像のアップロード")
-st.info("💡 複数の画像を一度に選んでアップロードしてください（PCならCtrlキーを押しながら選択）。")
+st.header("Step 1. 記事画像の読み込み（根拠の抽出）")
+st.info("💡 記事の画像を選択してください（複数可）。AIが「書いてあることだけ」を抜き出します。")
 
-uploaded_files = st.file_uploader("画像を選択（1ページ目、2ページ目...と複数可）", type=['png', 'jpg', 'jpeg'], accept_multiple_files=True)
+uploaded_files = st.file_uploader("画像を選択", type=['png', 'jpg', 'jpeg'], accept_multiple_files=True)
 
-if uploaded_files and st.button("🔍 記事の内容を詳しく抽出する", type="primary"):
+if uploaded_files and st.button("🔍 記事を解析する（解釈禁止モード）", type="primary"):
     
-    with st.spinner("AIが記事を読み、感想文に必要な箇所を抜き出しています..."):
+    with st.spinner("AIが主観を排除して記事を読み取っています..."):
         try:
             content_list = []
             
-            # 【修正点】「スキャナー」ではなく「読書アシスタント」として振る舞わせる
-            # これにより「読み取り拒否」を回避しつつ、正確な引用を引き出します
+            # 【重要】AIへの厳格な指示（Temperature=0で運用）
             system_prompt = """
-            あなたは社内木鶏会のための読書アシスタントです。
-            ユーザーが感想文を書くために、提供された記事画像の「詳細な内容」と「重要な文章」を抽出してください。
+            あなたは「書かれている文字を正確にデータ化する」厳格なアシスタントです。
+            提供された雑誌記事の画像から、感想文に必要な情報を抜き出してください。
 
-            【重要指示】
-            1. 記事全体の流れを詳細に要約すること。
-            2. 感想文の中で引用するために、著者の主張や印象的なエピソード部分は、勝手に要約せず「原文のまま」抜き出すこと。
-            3. 「一字一句読めません」というエラーは出さず、読める範囲で最大限詳しくテキスト化すること。
+            【絶対厳守のルール】
+            1. 「要約」を作成する際は、必ずその根拠となる文章が画像のどこにあるか（例：1枚目右段、2枚目左段など）を明記すること。
+            2. 著者の主張や名言を抜き出す際は、一言一句変えず、勝手な要約をせずに「原文のまま」引用すること。
+            3. 記事に書かれていない情報（一般的な知識やネットの情報）は一切混ぜないこと。
+            4. 読めない文字がある場合は、勝手に補完せず「（判読不能）」と書くこと。
             """
             
             content_list.append({"type": "text", "text": system_prompt})
@@ -69,11 +69,12 @@ if uploaded_files and st.button("🔍 記事の内容を詳しく抽出する", 
                     "image_url": {"url": f"data:image/jpeg;base64,{base64_image}"}
                 })
 
+            # Temperatureを0に設定＝「創造性ゼロ・事実のみ」
             response = client.chat.completions.create(
                 model="gpt-4o",
                 messages=[{"role": "user", "content": content_list}],
-                max_tokens=2500,
-                temperature=0.2 # 少しだけ柔軟性を持たせて拒否を回避
+                max_tokens=3000,
+                temperature=0.0
             )
             
             st.session_state.extracted_text = response.choices[0].message.content
@@ -84,15 +85,15 @@ if uploaded_files and st.button("🔍 記事の内容を詳しく抽出する", 
             st.error(f"読み取りエラー: {e}")
 
 # ==========================================
-# 読み取り結果の確認・修正
+# 読み取り結果の確認・修正（ここが重要）
 # ==========================================
 if st.session_state.extracted_text:
     st.markdown("---")
-    st.subheader("📄 抽出内容の確認")
-    st.caption("感想文に使われる「素材」です。引用が間違っている場合はここで修正できます。")
+    st.subheader("📄 読み取り結果の確認")
+    st.warning("⚠️ 以下の内容に「勝手な解釈」が含まれていないか確認してください。修正も可能です。")
     
-    # ここで人間がチェック・修正できる
-    edited_text = st.text_area("抽出テキスト（修正可）", st.session_state.extracted_text, height=400)
+    # ユーザーが修正できるエリア
+    edited_text = st.text_area("抽出されたテキスト", st.session_state.extracted_text, height=500)
     st.session_state.extracted_text = edited_text
 
     # ==========================================
@@ -101,29 +102,32 @@ if st.session_state.extracted_text:
     st.markdown("---")
     st.header("Step 2. 感想文の作成")
     
-    if st.button("✍️ 感想文を作成する"):
-        with st.spinner("指定された条件で執筆中..."):
+    if st.button("✍️ 上記の「事実」のみに基づいて感想文を作成する"):
+        with st.spinner("執筆中..."):
             try:
                 writer_prompt = f"""
                 あなたは税理士事務所の職員です。
-                以下の【記事データ】を元に、社内木鶏会用の読書感想文を作成してください。
+                以下の【確定した記事データ】のみを使用して、社内木鶏会用の読書感想文を作成してください。
 
-                【記事データ】
+                【確定した記事データ】
                 {st.session_state.extracted_text}
                 
-                【作成条件】
-                - 記事に書かれていないことを勝手に創作しないこと。
-                - 上記データ内の「原文」を適切に引用しながら書くこと。
-                - 構成：「①記事の要約」「②印象に残った言葉（引用）」「③自分の業務（税理士業務）への活かし方」
+                【執筆条件】
+                - 記事データにない情報は一切書かないこと（勝手な補足禁止）。
+                - 記事内の言葉を引用する場合は、一言一句正確に引用すること。
+                - 構成：
+                  1. 記事の要約（短く）
+                  2. 特に感銘を受けた言葉（原文引用）
+                  3. それを税理士業務や自分の人生にどう活かすか（ここだけは自分の決意を書く）
                 - 文字数：{target_length}文字前後
                 - 文体：「です・ます」調
-                - Excelに貼り付けるため、段落ごとの改行のみとし、タイトルは不要。
+                - タイトル不要。
                 """
 
                 res = client.chat.completions.create(
                     model="gpt-4o",
                     messages=[{"role": "user", "content": writer_prompt}],
-                    temperature=0.7
+                    temperature=0.7 # 文章の自然さのために少しだけ上げるが、ソースは厳守させる
                 )
                 
                 st.session_state.final_text = res.choices[0].message.content
@@ -133,7 +137,7 @@ if st.session_state.extracted_text:
                 st.error(f"執筆エラー: {e}")
 
 # ==========================================
-# Step 3: Excel出力
+# Step 3: Excel出力（40文字分割＆縮小）
 # ==========================================
 if st.session_state.final_text:
     st.markdown("---")
@@ -145,19 +149,19 @@ if st.session_state.final_text:
             wb = load_workbook(uploaded_template)
             ws = wb.active
             
-            # 40文字分割書き込み
+            # 40文字区切り処理
             lines = split_text(st.session_state.final_text, 40)
             
             start_row = 9
-            # 既存のクリア
-            for r in range(start_row, 50):
+            # 書き込み前に古いデータをクリア
+            for r in range(start_row, 60):
                 ws[f"A{r}"].value = None
-                ws[f"A{r}"].alignment = Alignment(wrap_text=False) # 一旦リセット
+                ws[f"A{r}"].alignment = Alignment(wrap_text=False)
 
+            # 書き込み & 縮小設定
             for i, line in enumerate(lines):
                 cell = ws[f"A{start_row + i}"]
                 cell.value = line
-                # 縮小して全体を表示
                 cell.alignment = Alignment(shrink_to_fit=True, wrap_text=False)
 
             out = io.BytesIO()
@@ -167,10 +171,10 @@ if st.session_state.final_text:
             st.download_button(
                 "📥 Excelをダウンロード", 
                 out, 
-                "致知感想文_完成.xlsx",
+                "致知感想文.xlsx",
                 type="primary"
             )
         except Exception as e:
-            st.error(f"Excelエラー: {e}")
+            st.error(f"Excel保存エラー: {e}")
     else:
         st.warning("Excelフォーマットをアップロードしてください。")
