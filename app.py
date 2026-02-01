@@ -11,7 +11,7 @@ import concurrent.futures
 # ページ設定
 # ==========================================
 st.set_page_config(
-    page_title="致知読書感想文アプリ v5.0",
+    page_title="致知読書感想文アプリ v5.1",
     layout="wide",
     page_icon="📖"
 )
@@ -95,16 +95,14 @@ def split_text(text, chunk_size):
 
 def process_ocr_task_safe(label, pil_images, model_id):
     """
-    【v5.0 修正版】並列処理用OCR関数
-    画像の物理分割を廃止し、AIのレイアウト認識能力を最大限活かすプロンプトに変更。
-    これにより、記事のカラムまたぎによる文章混在を防ぎます。
+    【OCR関数】
+    画像全体をAIに渡し、レイアウト認識させて読み取る。
     """
     if not pil_images:
         return ""
     
     try:
         gemini_inputs = []
-        # プロンプト修正：レイアウト認識と記事ごとの読み取りを強調
         system_prompt = (
             "あなたは高精度なOCRエンジンです。雑誌『致知』の紙面を読み取ります。\n"
             "【重要ルール】\n"
@@ -116,7 +114,6 @@ def process_ocr_task_safe(label, pil_images, model_id):
         )
         gemini_inputs.append(system_prompt)
         
-        # 画像をそのまま追加（物理カットしない）
         for i, img in enumerate(pil_images):
             gemini_inputs.append(f"\n\n[画像{i+1}枚目]\n")
             gemini_inputs.append(img)
@@ -129,24 +126,31 @@ def process_ocr_task_safe(label, pil_images, model_id):
         return f"[エラー: {label}の解析失敗: {e}]"
 
 def generate_draft(article_text, chat_context, target_len):
+    """
+    【修正版】感想文生成関数
+    チャットの内容（chat_context）を強制的に反映させるプロンプトに強化。
+    """
     if not client:
         return "エラー: OpenAI APIキーが設定されていません。"
 
+    # プロンプトの強化: チャット内容の反映を最優先事項にする
     system_prompt = (
         "あなたは税理士事務所の職員です。\n"
         "これから雑誌『致知』の読書感想文（社内木鶏会用）を作成します。\n"
-        "以下の【ユーザーの過去の感想文】を分析し、"
-        "**「文体」「書き出しの癖」「精神的な熱量」「業務（巡回監査・決算など）への結びつけ方」**を模倣してください。"
+        "以下の【ユーザーの過去の感想文】の**「文体・書き出し・熱量」**を模倣しつつ、"
+        "**【壁打ちチャットでの追加エピソード】**の内容を必ず文章の核として採用してください。"
     )
+    
     user_content = (
         f"【今回選択した記事のOCRデータ】\n{article_text}\n\n"
-        f"【ユーザーの過去の感想文（スタイル見本）】\n{PAST_REVIEWS}\n\n"
-        f"【打ち合わせ内容】\n{chat_context}\n\n"
+        f"【ユーザーの過去の感想文（文体見本）】\n{PAST_REVIEWS}\n\n"
+        f"【壁打ちチャットでの追加エピソード（※最重要※）】\n{chat_context}\n\n"
         "【執筆条件】\n"
         f"- 文字数：{target_len}文字前後\n"
         "- 文体：「です・ます」調\n"
         "- 段落ごとに改行を入れること。\n"
-        "- 構成：①記事の引用 ②自分の業務エピソード ③今後の決意"
+        "- 構成：①記事の引用 ②自分の業務エピソード（※チャットの内容を具体的に書くこと） ③今後の決意\n"
+        "- 注意：チャットでユーザーが語った具体的な体験談が反映されていない場合は、やり直しとなります。"
     )
     
     response = client.chat.completions.create(
@@ -159,7 +163,7 @@ def generate_draft(article_text, chat_context, target_len):
 # ==========================================
 # メイン画面
 # ==========================================
-st.title("📖 致知読書感想文アプリ v5.0 (レイアウト認識強化版)")
+st.title("📖 致知読書感想文アプリ v5.1 (壁打ち反映強化版)")
 st.caption("Step 1: 全体レイアウト解析OCR → Step 2: 記事選択・執筆 → Step 3: Excel出力")
 
 tab1, tab2, tab3 = st.tabs(["1️⃣ 画像解析", "2️⃣ 記事選択 & 執筆", "3️⃣ Excel出力"])
@@ -190,12 +194,10 @@ with tab1:
         else:
             with st.spinner("レイアウトを解析して読み取っています..."):
                 try:
-                    # PIL画像変換
                     images_main = [Image.open(f).convert("RGB") for f in files_main] if files_main else []
                     images_sub1 = [Image.open(f).convert("RGB") for f in files_sub1] if files_sub1 else []
                     images_sub2 = [Image.open(f).convert("RGB") for f in files_sub2] if files_sub2 else []
 
-                    # 並列処理実行
                     with concurrent.futures.ThreadPoolExecutor() as executor:
                         future_main = executor.submit(process_ocr_task_safe, "メイン記事", images_main, model_main)
                         future_sub1 = executor.submit(process_ocr_task_safe, "記事2", images_sub1, model_sub)
@@ -241,27 +243,37 @@ with tab2:
     with col_draft:
         st.markdown("### 📝 感想文ドラフト")
         
+        # 初稿作成ボタン
         if st.button("🚀 初稿を作成する", disabled=(not selected_article_text)):
             if not client:
                  st.error("OpenAI APIキーがありません。")
             else:
                 with st.spinner("執筆中..."):
-                    draft = generate_draft(selected_article_text, "", target_length)
+                    # チャット履歴をリセットして初稿を作る
+                    st.session_state.chat_history = [] 
+                    draft = generate_draft(selected_article_text, "(まだチャットはありません)", target_length)
                     st.session_state.current_draft = draft
-                    st.session_state.chat_history = [{
+                    
+                    # 最初の質問を履歴に入れる
+                    st.session_state.chat_history.append({
                         "role": "assistant", 
-                        "content": "初稿を作成しました！\nより良い感想文にするために、この記事に関連するあなたの具体的な体験談を教えてください。"
-                    }]
+                        "content": "初稿を作成しました！\nこれをよりあなたらしい文章にするために、**この記事のテーマに関連した、具体的な業務上の体験談**を教えてください。"
+                    })
                     st.rerun()
         
         if st.session_state.current_draft:
             st.text_area("現在の原稿", st.session_state.current_draft, height=600, key="draft_area")
             
-            if st.button("🔄 チャット反映して書き直し", type="primary"):
-                with st.spinner("リライト中..."):
+            # 【重要】チャット反映ボタン
+            if st.button("🔄 チャットの内容を反映して書き直す", type="primary"):
+                with st.spinner("チャットで出たエピソードを組み込んでリライト中..."):
+                    # チャット履歴を文字列化
                     chat_context = "\n".join([f"{m['role']}: {m['content']}" for m in st.session_state.chat_history])
-                    st.session_state.current_draft = generate_draft(selected_article_text, chat_context, target_length)
-                    st.success("完了！")
+                    
+                    # 再生成
+                    new_draft = generate_draft(selected_article_text, chat_context, target_length)
+                    st.session_state.current_draft = new_draft
+                    st.success("書き直しました！チャットのエピソードが反映されているか確認してください。")
                     st.rerun()
 
     with col_chat:
