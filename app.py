@@ -67,8 +67,8 @@ with st.sidebar:
     
     st.markdown("---")
     st.caption("🔧 モデル設定")
-    # デフォルト値を gemini-3-flash に設定
-    model_id_input = st.text_input("GeminiモデルID", value="gemini-3-flash")
+    # 【修正】デフォルト値を gemini-3-flash-preview に変更
+    model_id_input = st.text_input("GeminiモデルID", value="gemini-3-flash-preview")
     st.caption("※Google AI Studio等で確認できるモデル名を入力")
 
 # ==========================================
@@ -100,7 +100,7 @@ if total_files > 0:
                 gemini_inputs = []
                 
                 # ==========================================
-                # プロンプト修正：上下2段組みの読み順を指定
+                # プロンプト：上下2段組み対応・読み順指定
                 # ==========================================
                 system_prompt_text = (
                     "あなたは、雑誌『致知』の紙面を完璧に読み取る高精度OCRエンジンです。\n"
@@ -137,11 +137,12 @@ if total_files > 0:
                         elif key == "sub2":
                             gemini_inputs.append("\n\n=== 【ここから記事3の画像】 ===\n")
                         
-                        # 画像を追加（安全策込み）
+                        # 画像を追加（エラー対策済み）
                         for img_file in files:
                             try:
                                 img_file.seek(0)
                                 image = Image.open(img_file)
+                                # RGB変換（AlphaチャンネルやCMYK対策）
                                 if image.mode != "RGB":
                                     image = image.convert("RGB")
                                 gemini_inputs.append(image)
@@ -248,24 +249,3 @@ if st.session_state.final_text:
     st.text_area("完成テキスト", st.session_state.final_text, height=300)
 
     if uploaded_template:
-        try:
-            wb = load_workbook(uploaded_template)
-            ws = wb.active
-            
-            for row in range(EXCEL_START_ROW, 100):
-                ws[f"A{row}"].value = None
-            
-            lines = split_text(st.session_state.final_text, CHARS_PER_LINE)
-            for i, line in enumerate(lines):
-                cell = ws[f"A{EXCEL_START_ROW + i}"]
-                cell.value = line
-                cell.alignment = Alignment(wrap_text=False, shrink_to_fit=True)
-
-            out = io.BytesIO()
-            wb.save(out)
-            out.seek(0)
-            
-            st.download_button("📥 Excelダウンロード", out, "致知感想文.xlsx", type="primary")
-            
-        except Exception as e:
-            st.error(f"Excel処理エラー: {e}")
