@@ -9,7 +9,7 @@ import io
 # ==========================================
 # ページ設定
 # ==========================================
-st.set_page_config(page_title="致知読書感想文アプリ(Gemini×GPT)", layout="wide", page_icon="📖")
+st.set_page_config(page_title="致知読書感想文アプリ", layout="wide", page_icon="📖")
 st.title("📖 致知読書感想文作成アプリ")
 st.caption("Step 1：画像解析 (Gemini 1.5 Flash) → Step 2：感想文執筆 (GPT-4o)")
 
@@ -18,18 +18,18 @@ EXCEL_START_ROW = 9
 CHARS_PER_LINE = 40
 
 # ==========================================
-# API設定 (Secretsから取得)
+# API設定
 # ==========================================
 try:
-    # OpenAI設定
+    # OpenAI
     openai_key = st.secrets.get("OPENAI_API_KEY")
     if not openai_key:
         st.error("⚠️ OpenAI APIキーが設定されていません。")
         st.stop()
     client = OpenAI(api_key=openai_key)
 
-    # Google Gemini設定
-    google_key = st.secrets.get("GOOGLE_API_KEY") # secrets.tomlに GOOGLE_API_KEY を設定してください
+    # Google Gemini
+    google_key = st.secrets.get("GOOGLE_API_KEY")
     if not google_key:
         st.error("⚠️ Google APIキーが設定されていません。")
         st.stop()
@@ -44,7 +44,7 @@ except Exception as e:
 # ==========================================
 def split_text(text, chunk_size):
     """Excel用にテキストを指定文字数で分割"""
-    clean_text = text.replace('\n', '　') # 改行を全角スペースに置換
+    clean_text = text.replace('\n', '　')
     return [clean_text[i:i+chunk_size] for i in range(0, len(clean_text), chunk_size)]
 
 # ==========================================
@@ -64,52 +64,78 @@ with st.sidebar:
     target_length = st.selectbox("目標文字数", [300, 400, 500, 600, 700, 800], index=1)
 
 # ==========================================
-# Step 1: 画像解析 (Gemini使用)
+# Step 1: 画像解析 (Gemini / 3記事対応)
 # ==========================================
 st.header("Step 1. 記事画像の解析 (Powered by Gemini)")
-st.info("💡 Gemini 1.5 Flashを使用し、大量の画像を一括高速解析します。")
+st.info("💡 複数の記事をタブごとに分けてアップロードしてください。Gemini 1.5 Flashで一括解析します。")
 
-uploaded_files = st.file_uploader(
-    "画像をまとめて選択（ドラッグ＆ドロップ可）", 
-    type=['png', 'jpg', 'jpeg', 'webp'], 
-    accept_multiple_files=True
-)
+# 3つの記事に対応するタブ
+tab1, tab2, tab3 = st.tabs(["📂 メイン記事", "📂 記事2 (任意)", "📂 記事3 (任意)"])
 
-if uploaded_files:
-    st.write(f"📁 {len(uploaded_files)}枚の画像を読み込みました")
+files_dict = {}
 
-    if st.button("🔍 Geminiで画像を解析する", type="primary"):
-        with st.spinner("Geminiが画像を読んでいます..."):
+with tab1:
+    files_dict["main"] = st.file_uploader("メイン記事の画像", type=['png', 'jpg', 'jpeg', 'webp'], accept_multiple_files=True, key="u1")
+with tab2:
+    files_dict["sub1"] = st.file_uploader("記事2の画像", type=['png', 'jpg', 'jpeg', 'webp'], accept_multiple_files=True, key="u2")
+with tab3:
+    files_dict["sub2"] = st.file_uploader("記事3の画像", type=['png', 'jpg', 'jpeg', 'webp'], accept_multiple_files=True, key="u3")
+
+total_files = sum([len(f) for f in files_dict.values() if f])
+
+if total_files > 0:
+    st.write(f"📁 合計 {total_files}枚の画像を読み込みました")
+
+    if st.button("🔍 Geminiで全記事を解析する", type="primary"):
+        with st.spinner("Geminiが画像を精読しています..."):
             try:
-                # 1. ファイル名順にソート（重要）
-                uploaded_files.sort(key=lambda x: x.name)
-
-                # 2. 画像をPIL形式に変換してリスト化
-                image_parts = []
-                for file in uploaded_files:
-                    image_parts.append(Image.open(file))
-
-                # 3. Geminiへのプロンプト
-                gemini_prompt = """
-                あなたはOCRのスペシャリストです。
-                添付された雑誌『致知』の全ページ画像を読み込み、以下の情報を抽出してください。
-
-                【指示】
-                1. 記事全体の詳細な要約を作成してください。
-                2. 記事内の「重要な教え」や「印象的な言葉」を書き起こしてください。
-                3. 書き起こしの際は、必ず「掲載位置」を付記してください（例：1枚目右段、3枚目写真キャプションなど）。
-                4. 画像内の文字が読めない場合は無理に創作せず「(判読不能)」としてください。
-                5. 嘘（ハルシネーション）は絶対禁止です。書いてあることだけを出力してください。
-                """
-
-                # 4. Geminiモデル呼び出し (gemini-1.5-flash は画像入力に強い)
-                model = genai.GenerativeModel('gemini-1.5-flash')
+                # 入力リストの構築
+                gemini_inputs = []
                 
-                # 画像とテキストをまとめて送信
-                response = model.generate_content([gemini_prompt, *image_parts])
+                # プロンプト
+                system_prompt = """
+                あなたはOCR（文字認識）のスペシャリストです。
+                これから渡される雑誌『致知』の複数記事の画像から、テキスト情報を抽出してください。
+
+                【抽出ルール】
+                1. 記事ごとに「タイトル」「要約」「印象的な言葉（引用）」を抽出する。
+                2. 引用文には必ず【掲載位置】を付記する（例：メイン記事 2枚目 右段）。
+                3. 文字が読めない場合は「(判読不能)」と書く。ハルシネーション（嘘）は禁止。
+                4. 以下の形式で出力すること。
+                   ---
+                   【記事1：メイン】
+                   (内容)
+                   【記事2】
+                   (内容)
+                   【記事3】
+                   (内容)
+                   ---
+                """
+                gemini_inputs.append(system_prompt)
+
+                # 各タブの画像を処理
+                article_labels = {"main": "【ここからメイン記事の画像】", "sub1": "【ここから記事2の画像】", "sub2": "【ここから記事3の画像】"}
+
+                for key, files in files_dict.items():
+                    if files:
+                        # ファイル名順ソート
+                        files.sort(key=lambda x: x.name)
+                        
+                        gemini_inputs.append(article_labels[key])
+                        
+                        for img_file in files:
+                            # PIL Imageに変換
+                            image = Image.open(img_file)
+                            gemini_inputs.append(image)
+
+                # Geminiモデル呼び出し
+                # エラー回避のため 'gemini-1.5-flash-latest' を使用
+                model = genai.GenerativeModel('gemini-1.5-flash-latest')
+                
+                response = model.generate_content(gemini_inputs)
 
                 st.session_state.extracted_text = response.text
-                st.session_state.final_text = "" # リセット
+                st.session_state.final_text = ""
                 st.rerun()
 
             except Exception as e:
@@ -122,7 +148,7 @@ if st.session_state.extracted_text:
     st.markdown("---")
     st.subheader("📝 解析結果 (Gemini出力)")
     edited_text = st.text_area(
-        "編集エリア（Step 2で使用されます）", 
+        "編集エリア（ここで修正した内容が感想文に使われます）", 
         st.session_state.extracted_text, 
         height=500
     )
@@ -134,7 +160,7 @@ if st.session_state.extracted_text:
     st.markdown("---")
     st.header("Step 2. 感想文の執筆 (Powered by GPT-4o)")
 
-    if st.button("✍️ 感想文を作成する"):
+    if st.button("✍️ 税理士事務所員として感想文を書く"):
         with st.spinner("GPT-4oが執筆中..."):
             try:
                 writer_prompt = f"""
@@ -145,14 +171,14 @@ if st.session_state.extracted_text:
                 {st.session_state.extracted_text}
 
                 【構成】
-                1. 記事の要約
+                1. 記事の要約（複数の記事がある場合は、メインを中心にまとめる）
                 2. 印象に残った言葉（解析データの引用元情報を活用し、正確に記載）
-                3. 自分の業務（税理士補助・顧客対応）への活かし方
+                3. 自分の業務（税理士補助・顧客対応・監査など）への具体的な活かし方
 
-                【条件】
+                【執筆条件】
                 - 文字数：{target_length}文字前後
                 - 文体：「です・ます」調
-                - タイトル不要。段落ごとに改行。
+                - タイトル不要。段落ごとに改行を入れる。
                 - 解析データにない内容は創作しないこと。
                 """
 
