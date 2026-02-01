@@ -11,13 +11,13 @@ import concurrent.futures
 # ページ設定
 # ==========================================
 st.set_page_config(
-    page_title="致知読書感想文アプリ v5.4",
+    page_title="致知読書感想文アプリ v5.5",
     layout="wide",
     page_icon="📖"
 )
 
 # ==========================================
-# 【ユーザー設定エリア: 過去の文体学習】
+# 【ユーザー設定エリア】
 # ==========================================
 PAST_REVIEWS = """
 （例：過去の感想文）
@@ -28,7 +28,6 @@ PAST_REVIEWS = """
 それがプロフェッショナルとしての流儀だと感じます。
 """
 
-# Excel書き込み設定
 EXCEL_START_ROW = 9
 CHARS_PER_LINE = 40
 
@@ -69,8 +68,7 @@ with st.sidebar:
     model_sub = st.text_input("サブModel ID", value="gemini-2.0-flash-lite-preview-02-05")
 
     if st.button("🗑️ リセット"):
-        for key in st.session_state.keys():
-            del st.session_state[key]
+        st.session_state.clear()
         st.rerun()
 
 # ==========================================
@@ -84,6 +82,9 @@ if "chat_history" not in st.session_state:
     st.session_state.chat_history = []
 if "selected_article_key" not in st.session_state:
     st.session_state.selected_article_key = "main"
+# 【重要】テキストエリアを強制リフレッシュするためのカウンタ
+if "rewrite_count" not in st.session_state:
+    st.session_state.rewrite_count = 0
 
 # ==========================================
 # 関数定義
@@ -94,84 +95,56 @@ def split_text(text, chunk_size):
     return [clean_text[i:i+chunk_size] for i in range(0, len(clean_text), chunk_size)]
 
 def process_ocr_task_safe(label, pil_images, model_id):
-    """
-    【OCR関数】
-    """
-    if not pil_images:
-        return ""
-    
+    if not pil_images: return ""
     try:
         gemini_inputs = []
         system_prompt = (
             "あなたは高精度なOCRエンジンです。雑誌『致知』の紙面を読み取ります。\n"
-            "【重要ルール】\n"
-            "1. 画像全体を見て、レイアウト（段組み）を認識してください。\n"
-            "2. 記事のブロック（意味のまとまり）ごとに読み進めてください。\n"
-            "3. 縦書きの段組みがある場合、右の段から左の段へと順番に読み、段をまたいで一行として読まないように注意してください。\n"
-            "4. 複数の記事がある場合は、記事ごとに区切って出力してください。\n"
-            "5. 出力形式: [画像番号] <本文>..."
+            "レイアウト（段組み）を認識し、記事のブロックごとに、右から左へ縦書きの流れを汲んで文字起こしをしてください。\n"
+            "出力形式: [画像番号] <本文>..."
         )
         gemini_inputs.append(system_prompt)
-        
         for i, img in enumerate(pil_images):
             gemini_inputs.append(f"\n\n[画像{i+1}枚目]\n")
             gemini_inputs.append(img)
-        
         model = genai.GenerativeModel(model_id)
         response = model.generate_content(gemini_inputs)
         return response.text
-        
     except Exception as e:
         return f"[エラー: {label}の解析失敗: {e}]"
 
 def generate_draft(article_text, chat_context, target_len):
-    """
-    【感想文生成関数】
-    """
-    if not client:
-        return "エラー: OpenAI APIキーが設定されていません。"
+    if not client: return "エラー: OpenAI APIキーが必要です。"
 
-    # パターンA: 初稿作成
+    # プロンプトの切り替え
     if not chat_context:
+        # 初稿モード
         system_prompt = (
-            "あなたは税理士事務所の職員です。\n"
-            "雑誌『致知』の読書感想文（社内木鶏会用）の【初稿】を作成します。\n"
-            "【ユーザーの過去の感想文】の文体を模倣し、【記事の内容】を要約・引用して感想文を構成してください。\n"
-            "**重要: まだ具体的なエピソードは入力されていません。「日々の業務において～」等の一般的な表現に留めてください。勝手な創作は禁止です。**"
+            "あなたは税理士事務所の職員です。雑誌『致知』の読書感想文の【初稿】を作成します。\n"
+            "過去の文体サンプルを模倣し、記事を要約してください。\n"
+            "**重要：まだ具体的な体験談は入力されていません。「日々の業務において〜」等の一般的な表現で留めてください。創作は厳禁です。**"
         )
         user_content = (
-            f"【今回選択した記事のOCRデータ】\n{article_text}\n\n"
-            f"【ユーザーの過去の感想文（文体見本）】\n{PAST_REVIEWS}\n\n"
-            "【執筆条件】\n"
-            f"- 文字数：{target_len}文字前後\n"
-            "- 文体：「です・ます」調\n"
-            "- 構成：①記事の引用・要約 ②一般的な業務への気づき（※創作厳禁） ③今後の決意"
-        )
-
-    # パターンB: 書き直し（壁打ち反映）
-    else:
-        system_prompt = (
-            "あなたはプロのライターです。読書感想文の【全面書き直し】を行います。\n"
-            "【重要指令】\n"
-            "ユーザーとの『壁打ちチャット』で語られた**具体的なエピソード**を、感想文のメインコンテンツとして採用してください。\n"
-            "初稿にあった「一般的な業務の話」は全て削除し、チャットの会話ログにある「固有名詞や具体的な出来事（いつ、誰が、どうした）」に差し替えてください。\n"
-            "**チャットの内容を反映していないと判断された場合、タスク失敗となります。**"
-        )
-        user_content = (
-            f"【最優先：壁打ちチャットの記録】\n"
-            f"=========================================\n"
-            f"{chat_context}\n"
-            f"=========================================\n"
-            f"↑ここに書かれているユーザーの体験談を必ず本文に組み込んでください。\n\n"
-            f"【参照する記事データ】\n{article_text}\n\n"
+            f"【記事データ】\n{article_text}\n\n"
             f"【文体サンプル】\n{PAST_REVIEWS}\n\n"
-            "【執筆条件】\n"
-            f"- 文字数：{target_len}文字前後\n"
-            "- 文体：「です・ます」調\n"
-            "- 構成：\n"
-            "  1. 記事の感銘を受けた言葉の引用\n"
-            "  2. **チャットで語られた具体的なエピソード**（※ここを最も厚く書くこと）\n"
-            "  3. 今後の決意"
+            f"【文字数】{target_len}文字前後"
+        )
+    else:
+        # 書き直しモード（強力な反映指示）
+        system_prompt = (
+            "あなたはプロのライターです。読書感想文の【エピソード差し替え】を行います。\n"
+            "現在あるドラフトの「一般的な業務の話」部分を削除し、\n"
+            "**以下のチャットログにある『具体的な体験談』に完全に書き換えてください。**\n"
+            "チャットで語られた内容（いつ、誰が、どうした）が含まれていなければ失敗とみなします。"
+        )
+        user_content = (
+            f"【最優先：組み込むべきユーザーのエピソード】\n"
+            f"--------------------------------------------------\n"
+            f"{chat_context}\n"
+            f"--------------------------------------------------\n"
+            f"↑この内容を感想文のメインパート（全体の6割）として展開してください。\n\n"
+            f"【元記事】\n{article_text}\n\n"
+            f"【文字数】{target_len}文字前後"
         )
     
     response = client.chat.completions.create(
@@ -182,162 +155,165 @@ def generate_draft(article_text, chat_context, target_len):
     return response.choices[0].message.content
 
 # ==========================================
-# メイン画面
+# メイン画面構成
 # ==========================================
-st.title("📖 致知読書感想文アプリ v5.4 (強制更新版)")
-st.caption("Step 1: 全体レイアウト解析OCR → Step 2: 記事選択・執筆 → Step 3: Excel出力")
+st.title("📖 致知読書感想文アプリ v5.5 (強制更新版)")
+st.caption("Step 1: OCR → Step 2: 記事選択・執筆 → Step 3: Excel出力")
 
 tab1, tab2, tab3 = st.tabs(["1️⃣ 画像解析", "2️⃣ 記事選択 & 執筆", "3️⃣ Excel出力"])
 
 # ------------------------------------------------------------------
-# Tab 1: 並列OCR処理
+# Tab 1: OCR
 # ------------------------------------------------------------------
 with tab1:
     st.subheader("Step 1. 記事画像の読み込み")
-    st.info("画像を分割せず、AIにレイアウト全体を認識させることで正確に読み取ります。")
-
     col1, col2, col3 = st.columns(3)
     with col1:
-        st.markdown("#### 📂 メイン記事")
-        files_main = st.file_uploader("画像を選択", type=['png', 'jpg', 'jpeg'], accept_multiple_files=True, key="f1")
+        files_main = st.file_uploader("メイン記事", type=['png', 'jpg', 'jpeg'], accept_multiple_files=True, key="f1")
     with col2:
-        st.markdown("#### 📂 記事2")
-        files_sub1 = st.file_uploader("画像を選択", type=['png', 'jpg', 'jpeg'], accept_multiple_files=True, key="f2")
+        files_sub1 = st.file_uploader("記事2", type=['png', 'jpg', 'jpeg'], accept_multiple_files=True, key="f2")
     with col3:
-        st.markdown("#### 📂 記事3")
-        files_sub2 = st.file_uploader("画像を選択", type=['png', 'jpg', 'jpeg'], accept_multiple_files=True, key="f3")
+        files_sub2 = st.file_uploader("記事3", type=['png', 'jpg', 'jpeg'], accept_multiple_files=True, key="f3")
 
-    if st.button("🚀 全記事を一括解析 (並列スタート)", type="primary"):
+    if st.button("🚀 解析スタート", type="primary"):
         if not (files_main or files_sub1 or files_sub2):
-            st.error("画像が選択されていません。")
+            st.error("画像を選択してください。")
         elif not google_key:
-            st.error("Google APIキーが設定されていません。")
+            st.error("Google APIキーが必要です。")
         else:
-            with st.spinner("レイアウトを解析して読み取っています..."):
+            with st.spinner("解析中..."):
                 try:
                     images_main = [Image.open(f).convert("RGB") for f in files_main] if files_main else []
                     images_sub1 = [Image.open(f).convert("RGB") for f in files_sub1] if files_sub1 else []
                     images_sub2 = [Image.open(f).convert("RGB") for f in files_sub2] if files_sub2 else []
 
                     with concurrent.futures.ThreadPoolExecutor() as executor:
-                        future_main = executor.submit(process_ocr_task_safe, "メイン記事", images_main, model_main)
-                        future_sub1 = executor.submit(process_ocr_task_safe, "記事2", images_sub1, model_sub)
-                        future_sub2 = executor.submit(process_ocr_task_safe, "記事3", images_sub2, model_sub)
-                        
-                        st.session_state.ocr_results["main"] = future_main.result()
-                        st.session_state.ocr_results["sub1"] = future_sub1.result()
-                        st.session_state.ocr_results["sub2"] = future_sub2.result()
-                    
-                    st.success("✅ 解析完了！ '2️⃣ 記事選択 & 執筆' タブへ進んでください。")
+                        f1 = executor.submit(process_ocr_task_safe, "メイン", images_main, model_main)
+                        f2 = executor.submit(process_ocr_task_safe, "記事2", images_sub1, model_sub)
+                        f3 = executor.submit(process_ocr_task_safe, "記事3", images_sub2, model_sub)
+                        st.session_state.ocr_results["main"] = f1.result()
+                        st.session_state.ocr_results["sub1"] = f2.result()
+                        st.session_state.ocr_results["sub2"] = f3.result()
+                    st.success("解析完了！")
                 except Exception as e:
-                    st.error(f"予期せぬエラーが発生しました: {e}")
+                    st.error(f"エラー: {e}")
 
-    with st.expander("OCR解析結果を確認する"):
+    with st.expander("OCR結果詳細"):
         st.text_area("Main", st.session_state.ocr_results["main"], height=100)
-        st.text_area("Sub1", st.session_state.ocr_results["sub1"], height=100)
-        st.text_area("Sub2", st.session_state.ocr_results["sub2"], height=100)
 
 # ------------------------------------------------------------------
-# Tab 2: 記事選択 & 執筆 & 壁打ち
+# Tab 2: 執筆 & 壁打ち (ここが修正の核心)
 # ------------------------------------------------------------------
 with tab2:
-    st.subheader("Step 2. 執筆対象の選択と壁打ち")
+    st.subheader("Step 2. 執筆 & 壁打ち")
     
-    options_map = {"main": "メイン記事", "sub1": "記事2", "sub2": "記事3"}
-    valid_options = [k for k, v in st.session_state.ocr_results.items() if len(v) > 10]
+    # 記事選択
+    options = {k: v for k, v in st.session_state.ocr_results.items() if len(v) > 10}
+    map_label = {"main": "メイン記事", "sub1": "記事2", "sub2": "記事3"}
     
-    if not valid_options:
-        st.warning("OCRデータがありません。Tab 1で解析を行ってください。")
-        selected_article_text = ""
+    if not options:
+        st.warning("まずはTab 1でOCRを実行してください。")
+        selected_text = ""
     else:
-        selected_key = st.radio("対象記事を選択", valid_options, format_func=lambda x: options_map[x], horizontal=True)
-        selected_article_text = st.session_state.ocr_results[selected_key]
-        
-        if selected_key != st.session_state.selected_article_key:
-            st.session_state.selected_article_key = selected_key
-            st.toast(f"{options_map[selected_key]} に切り替えました")
+        sel = st.radio("執筆対象", list(options.keys()), format_func=lambda x: map_label[x], horizontal=True)
+        selected_text = options[sel]
 
     st.markdown("---")
-
+    
+    # 左右カラム定義
     col_draft, col_chat = st.columns([1, 1])
 
+    # ------------------------------------------------
+    # 左カラム：感想文ドラフト
+    # ------------------------------------------------
     with col_draft:
-        st.markdown("### 📝 感想文ドラフト")
+        st.markdown("### 📝 感想文")
         
         # 初稿作成
-        if st.button("🚀 初稿を作成する", disabled=(not selected_article_text)):
+        if st.button("🚀 初稿を作成 (まだエピソードなし)"):
             if not client:
-                 st.error("OpenAI APIキーがありません。")
+                st.error("OpenAI APIキーが必要です。")
             else:
-                with st.spinner("初稿を作成中..."):
-                    st.session_state.chat_history = [] 
-                    draft = generate_draft(selected_article_text, None, target_length)
+                with st.spinner("初稿作成中..."):
+                    st.session_state.chat_history = [] # 履歴リセット
+                    draft = generate_draft(selected_text, None, target_length)
                     st.session_state.current_draft = draft
+                    st.session_state.rewrite_count += 1 # 強制更新用カウントアップ
                     
-                    # 【重要】テキストエリアの表示を強制的にリセット
-                    st.session_state["draft_area"] = draft 
-                    
+                    # 最初のAIメッセージ
                     st.session_state.chat_history.append({
-                        "role": "assistant", 
-                        "content": "初稿を作成しました！\n\n**この記事のテーマに関連して、あなたの業務で起きた具体的な出来事（成功・失敗・気づき）を教えてください。感想文に反映させます。**"
+                        "role": "assistant",
+                        "content": "初稿を作りました。\n**この記事に関連して、あなたの業務での具体的な体験談（成功・失敗）を右のチャットで教えてください。**"
                     })
                     st.rerun()
-        
-        if st.session_state.current_draft:
-            # key="draft_area" を指定しているため、st.session_state["draft_area"] を更新する必要がある
-            st.text_area("現在の原稿", st.session_state.current_draft, height=600, key="draft_area")
-            
-            # 書き直し
-            if st.button("🔄 チャットの内容を反映して書き直す", type="primary"):
-                if len(st.session_state.chat_history) <= 1:
-                    st.warning("まだチャットでエピソードを話していません。")
-                else:
-                    with st.spinner("チャットのエピソードを組み込んでリライト中..."):
-                        chat_context = "\n".join([f"{m['role']}: {m['content']}" for m in st.session_state.chat_history])
-                        
-                        new_draft = generate_draft(selected_article_text, chat_context, target_length)
-                        st.session_state.current_draft = new_draft
-                        
-                        # 【重要】ウィジェットの状態をコードから強制的に上書きする
-                        st.session_state["draft_area"] = new_draft 
-                        
-                        st.success("書き直しました！")
-                        st.rerun()
 
+        # 書き直しボタン
+        if st.button("🔄 チャット内容を反映して書き直す", type="primary"):
+            if len(st.session_state.chat_history) <= 1:
+                st.warning("右側のチャットでエピソードを入力してください。")
+            else:
+                with st.spinner("チャットのエピソードを反映中..."):
+                    # チャット履歴を全部渡す
+                    chat_log = "\n".join([f"{m['role']}: {m['content']}" for m in st.session_state.chat_history])
+                    new_draft = generate_draft(selected_text, chat_log, target_length)
+                    
+                    st.session_state.current_draft = new_draft
+                    st.session_state.rewrite_count += 1 # 【重要】これでテキストエリアが生まれ変わる
+                    st.success("反映完了！")
+                    st.rerun()
+
+        # ドラフト表示エリア
+        if st.session_state.current_draft:
+            # keyを動的に変えることで、Streamlitに「新しいウィジェットだ」と認識させ、強制的にvalueを読み込ませる
+            dynamic_key = f"draft_area_{st.session_state.rewrite_count}"
+            
+            st.text_area(
+                "現在の原稿", 
+                value=st.session_state.current_draft, 
+                height=600, 
+                key=dynamic_key
+            )
+
+    # ------------------------------------------------
+    # 右カラム：壁打ちチャット (常に表示)
+    # ------------------------------------------------
     with col_chat:
-        st.markdown("### 💬 壁打ち")
+        st.markdown("### 💬 エピソード深掘りチャット")
         chat_container = st.container(height=500)
         
-        for message in st.session_state.chat_history:
-            with chat_container.chat_message(message["role"]):
-                st.markdown(message["content"])
+        # 履歴表示
+        for msg in st.session_state.chat_history:
+            with chat_container.chat_message(msg["role"]):
+                st.markdown(msg["content"])
 
-        if prompt := st.chat_input("エピソードを入力..."):
-            if not selected_article_text:
-                st.error("先に記事を選択して初稿を作成してください。")
+        # 入力フォーム
+        if prompt := st.chat_input("体験談を入力..."):
+            if not selected_text:
+                st.error("先に初稿を作成してください。")
             elif not client:
-                st.error("OpenAI APIキーがありません。")
+                st.error("OpenAI APIキーが必要です。")
             else:
+                # ユーザーの入力を追加
                 st.session_state.chat_history.append({"role": "user", "content": prompt})
                 with chat_container.chat_message("user"):
                     st.markdown(prompt)
 
+                # AIの返答生成
                 with chat_container.chat_message("assistant"):
                     with st.spinner("考え中..."):
-                        chat_sys = f"あなたは編集者です。以下の記事内容を踏まえ、ユーザーから深いエピソードを引き出してください。\n記事: {selected_article_text[:500]}..."
-                        msgs = [{"role": "system", "content": chat_sys}] + st.session_state.chat_history
+                        sys_msg = f"あなたは編集者です。以下の記事: {selected_text[:300]}... を踏まえ、ユーザーからより深いエピソード（いつ、誰が、どうした）を引き出す質問をしてください。"
+                        msgs = [{"role": "system", "content": sys_msg}] + st.session_state.chat_history
                         res = client.chat.completions.create(model="gpt-4o", messages=msgs)
-                        ai_res = res.choices[0].message.content
-                        
-                st.markdown(ai_res)
-                st.session_state.chat_history.append({"role": "assistant", "content": ai_res})
+                        ai_msg = res.choices[0].message.content
+                
+                st.markdown(ai_msg)
+                st.session_state.chat_history.append({"role": "assistant", "content": ai_msg})
 
 # ------------------------------------------------------------------
 # Tab 3: Excel出力
 # ------------------------------------------------------------------
 with tab3:
     st.subheader("Step 3. Excel出力")
-    
     if st.session_state.current_draft and uploaded_template:
         if st.button("📥 Excelダウンロード"):
             try:
@@ -356,5 +332,3 @@ with tab3:
                 st.success("完了！")
             except Exception as e:
                 st.error(f"エラー: {e}")
-    else:
-        st.info("感想文を作成し、テンプレートをアップロードしてください。")
