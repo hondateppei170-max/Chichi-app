@@ -65,11 +65,12 @@ with st.sidebar:
     uploaded_template = st.file_uploader("感想文フォーマット(.xlsx)", type=["xlsx"])
     target_length = st.selectbox("目標文字数", [300, 400, 500, 600, 700, 800], index=1)
     
-    # モデルIDの手動オーバーライド（念のため）
+    # モデルIDの手動オーバーライド
     st.markdown("---")
     st.caption("🔧 モデル設定")
+    # デフォルト値を gemini-3-flash に設定
     model_id_input = st.text_input("GeminiモデルID", value="gemini-3-flash")
-    st.caption("※Google AI Studioで表示されているIDを入力してください。")
+    st.caption("※Google AI Studio等で確認できるモデル名を入力")
 
 # ==========================================
 # Step 1: 画像解析 (Gemini 3 Flash)
@@ -122,7 +123,94 @@ if total_files > 0:
                 gemini_inputs.append(system_prompt)
 
                 # 各タブの画像を処理
+                # エラー回避のため、文字列の定義を修正
                 article_labels = {
                     "main": "\n\n=== 【ここからメイン記事の画像】 ===\n", 
                     "sub1": "\n\n=== 【ここから記事2の画像】 ===\n", 
-                    "sub2": "\n\n
+                    "sub2": "\n\n=== 【ここから記事3の画像】 ===\n"
+                }
+
+                for key, files in files_dict.items():
+                    if files:
+                        files.sort(key=lambda x: x.name)
+                        gemini_inputs.append(article_labels[key])
+                        for img_file in files:
+                            image = Image.open(img_file)
+                            gemini_inputs.append(image)
+
+                # ==========================================
+                # Gemini モデル呼び出し
+                # ==========================================
+                try:
+                    # ユーザー指定のモデルIDを使用
+                    model = genai.GenerativeModel(model_id_input)
+                    response = model.generate_content(gemini_inputs)
+                    
+                    st.session_state.extracted_text = response.text
+                    st.session_state.final_text = ""
+                    st.success("✅ 解析完了")
+                    st.rerun()
+
+                except Exception as e_model:
+                    st.error(f"モデル「{model_id_input}」での解析に失敗しました。")
+                    st.error(f"エラー内容: {e_model}")
+                    
+                    # 利用可能なモデル一覧を表示
+                    st.markdown("---")
+                    st.warning("📋 現在のAPIキーで利用可能なモデル一覧:")
+                    try:
+                        available_models = []
+                        for m in genai.list_models():
+                            if 'generateContent' in m.supported_generation_methods:
+                                available_models.append(m.name)
+                        st.code("\n".join(available_models))
+                        st.caption("※上記リストにある名前をサイドバーの設定欄に入力して再試行してください。")
+                    except Exception as e_list:
+                        st.error(f"モデル一覧の取得にも失敗しました: {e_list}")
+                    st.stop()
+
+            except Exception as e:
+                st.error(f"システムエラー: {e}")
+
+# ==========================================
+# 解析結果の編集
+# ==========================================
+if st.session_state.extracted_text:
+    st.markdown("---")
+    st.subheader("📝 解析結果 (OCRデータ)")
+    edited_text = st.text_area(
+        "OCR結果編集エリア", 
+        st.session_state.extracted_text, 
+        height=500
+    )
+    st.session_state.extracted_text = edited_text
+
+    # ==========================================
+    # Step 2: 感想文作成 (OpenAI)
+    # ==========================================
+    st.markdown("---")
+    st.header("Step 2. 感想文の執筆 (GPT-4o)")
+
+    if st.button("✍️ 税理士事務所員として感想文を書く"):
+        if not st.session_state.extracted_text:
+             st.error("解析データが空です。Step 1を実行してください。")
+        else:
+            with st.spinner("GPT-4oが執筆中..."):
+                try:
+                    writer_prompt = f"""
+                    あなたは税理士事務所の職員です。
+                    以下の【OCR解析データ】は、雑誌『致知』の記事を文字起こししたものです。
+                    この内容を元に、社内木鶏会用の読書感想文を作成してください。
+
+                    【OCR解析データ】
+                    {st.session_state.extracted_text}
+
+                    【構成】
+                    1. 記事の要約
+                       - メイン記事の内容を中心に要約する。
+                    
+                    2. 印象に残った言葉（引用）
+                       - 解析データ内の原文を引用する際は、必ず正確に記述すること。
+                       - 引用部分の後に、（〇〇記事 〇枚目 右段より）のように、解析データにある位置情報を元に出典元を記載すること。
+
+                    3
