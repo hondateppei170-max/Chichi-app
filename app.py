@@ -1,109 +1,96 @@
 import streamlit as st
-import subprocess
-import sys
+import google.generativeai as genai
+from openai import OpenAI
+from openpyxl import load_workbook
 import io
 
-# --- 🛠️ 強制修復エリア（ここが重要です） ---
-# システムが古い道具を使わないよう、アプリ起動時に強制的に最新版を入れます
-try:
-    import google.generativeai
-    # バージョンが古い、または入っていない場合はエラーを起こして修復に進む
-    if google.generativeai.__version__ < "0.8.3":
-        raise ImportError
-except ImportError:
-    # 画面にメッセージを出してインストール開始
-    st.write("🔧 AIの準備をしています...（初回のみ時間がかかります）")
-    subprocess.check_call([sys.executable, "-m", "pip", "install", "--upgrade", "google-generativeai>=0.8.3", "openpyxl"])
-    st.rerun() # インストール後に再起動
-
-# ---------------------------------------------
-
-import google.generativeai as genai
-from openpyxl import load_workbook
-
 # --- ページ設定 ---
-st.set_page_config(page_title="致知読書感想文作成アシスタント", layout="wide", page_icon="📖")
-st.title("📖 致知読書感想文作成アプリ")
-st.caption("鈴木尚剛税理士事務所 | 社内木鶏会感想文生成ツール")
+st.set_page_config(page_title="致知読書感想文マスター", layout="wide", page_icon="📖")
+st.title("📖 致知読書感想文作成アプリ (Gemini × ChatGPT)")
+st.caption("鈴木尚剛税理士事務所 | 完全自動化ツール")
 
 # --- APIキーの設定 ---
+# 1. Gemini (読み取り担当)
 try:
     genai.configure(api_key=st.secrets["GOOGLE_API_KEY"])
-    # 100%確実に動くモデルを指定
-    model = genai.GenerativeModel('gemini-1.5-flash')
-except Exception as e:
-    st.error(f"設定エラー: APIキーが見つかりません。Settings > Secretsを確認してください。\n詳細: {e}")
-    st.stop()
+    model_gemini = genai.GenerativeModel('gemini-1.5-flash')
+except Exception:
+    st.error("⚠️ Google APIキーの設定が必要です。")
+
+# 2. ChatGPT (執筆担当)
+try:
+    client_gpt = OpenAI(api_key=st.secrets["OPENAI_API_KEY"])
+except Exception:
+    st.error("⚠️ OpenAI APIキーの設定が必要です。Secretsを確認してください。")
 
 # --- セッション状態 ---
-if "summary" not in st.session_state: st.session_state.summary = ""
+if "extracted_text" not in st.session_state: st.session_state.extracted_text = ""
 if "final_text" not in st.session_state: st.session_state.final_text = ""
 
-# --- サイドバー ---
+# --- サイドバー設定 ---
 with st.sidebar:
-    st.header("⚙️ 設定")
-    target_cell = st.text_input("開始セル", value="A9")
-    target_length = st.selectbox("目標文字数", [300, 400, 500, 600, 700], index=1)
+    st.header("⚙️ 出力設定")
+    target_cell = st.text_input("Excelの開始セル", value="A9")
+    target_length = st.selectbox("文字数", [300, 400, 500, 600, 700], index=1)
     uploaded_template = st.file_uploader("感想文フォーマット(xlsx)", type=["xlsx"])
 
-# --- メイン機能 Step 1: 記事解析 ---
+# --- メイン機能 ---
 st.info("雑誌『致知』の記事（画像またはPDF）をアップロードしてください。")
+uploaded_files = st.file_uploader("ファイルを選択", type=['png', 'jpg', 'jpeg', 'pdf'], accept_multiple_files=True)
 
-uploaded_files = st.file_uploader(
-    "ファイルを選択（複数可）", 
-    type=['png', 'jpg', 'jpeg', 'pdf'], 
-    accept_multiple_files=True
-)
-
-if uploaded_files and st.button("記事を解析する", type="primary"):
-    with st.spinner("Geminiが記事を読んでいます..."):
+if uploaded_files and st.button("🚀 自動作成スタート", type="primary"):
+    
+    # Step 1: Geminiで文字を読む
+    with st.spinner("👀 Geminiが記事を読んでいます..."):
         try:
-            prompt = "あなたはプロのライターです。提供された資料（雑誌記事）の「タイトル」と、300文字程度の「要約」を作成してください。"
+            prompt = "この資料の文字をすべて読み取って、内容を詳細にテキスト化してください。"
             request_content = [prompt]
-            
             for f in uploaded_files:
                 request_content.append({"mime_type": f.type, "data": f.getvalue()})
             
-            response = model.generate_content(request_content)
-            st.session_state.summary = response.text
-            st.success("解析完了！")
+            response_gemini = model_gemini.generate_content(request_content)
+            st.session_state.extracted_text = response_gemini.text
+        except Exception as e:
+            st.error(f"読み取りエラー: {e}")
+            st.stop()
+
+    # Step 2: ChatGPTで感想文を書く
+    with st.spinner("✍️ ChatGPTが感想文を執筆中..."):
+        try:
+            system_prompt = "あなたは税理士事務所の真面目な職員です。社内木鶏会で発表するための読書感想文を作成してください。"
+            user_prompt = f"""
+            以下の記事内容を元に、読書感想文を書いてください。
+
+            【記事の内容】:
+            {st.session_state.extracted_text}
+
+            【条件】:
+            - 文字数は {target_length} 文字前後。
+            - 「①記事を読んで感じたこと」「②自分の業務（税理士業務）や人生にどう生かすか」を含める。
+            - 文体は「です・ます」調。タイトルは不要。
+            """
+
+            response_gpt = client_gpt.chat.completions.create(
+                model="gpt-4o", # 最新の高精度モデル
+                messages=[
+                    {"role": "system", "content": system_prompt},
+                    {"role": "user", "content": user_prompt}
+                ],
+                temperature=0.7,
+            )
+            st.session_state.final_text = response_gpt.choices[0].message.content
+            st.success("✨ 完成しました！")
             st.rerun()
             
         except Exception as e:
-            st.error(f"解析エラーが発生しました: {e}")
-            st.info("【ヒント】Google APIキーが正しいか、もう一度確認してください。")
+            st.error(f"執筆エラー: {e}")
 
-# --- メイン機能 Step 2: 感想文生成 ---
-if st.session_state.summary:
-    st.subheader("📝 記事の要約")
-    st.info(st.session_state.summary)
-    
-    st.divider()
-    user_instruction = st.text_input("感想文の方向性（例：『感謝の心をテーマに』など、空欄でもOK）", key="instruction")
-
-    if st.button("✨ 感想文を作成する"):
-        with st.spinner("感想文を執筆中..."):
-            try:
-                final_prompt = f"""
-                以下の要約と指示を元に、社内木鶏会で発表するための読書感想文を作成してください。
-                【記事要約】: {st.session_state.summary}
-                【ユーザーの指示】: {user_instruction}
-                【条件】: 
-                - 文字数は {target_length} 文字前後。
-                - 「①感じたこと」「②人生・仕事（税理士業務）にどう生かすか」を含める。
-                - 文体は「です・ます」調。タイトル不要。
-                """
-                res = model.generate_content(final_prompt)
-                st.session_state.final_text = res.text
-                st.rerun()
-            except Exception as e:
-                st.error(f"作成エラー: {e}")
-
-# --- メイン機能 Step 3: 出力 ---
+# --- 結果表示とダウンロード ---
 if st.session_state.final_text:
     st.subheader("🎉 完成した感想文")
-    st.text_area("内容確認", st.session_state.final_text, height=300)
+    st.text_area("内容確認", st.session_state.final_text, height=400)
     
+    # Excelダウンロードボタン
     if uploaded_template:
         try:
             wb = load_workbook(uploaded_template)
@@ -111,8 +98,9 @@ if st.session_state.final_text:
             ws[target_cell] = st.session_state.final_text
             out = io.BytesIO()
             wb.save(out)
-            st.download_button("📥 Excelダウンロード", out.getvalue(), "致知感想文.xlsx")
+            out.seek(0)
+            st.download_button("📥 Excelファイルでダウンロード", out, "致知感想文.xlsx")
         except Exception as e:
-            st.error(f"Excel保存エラー: {e}")
+            st.error("Excel書き込みエラー")
     else:
-        st.warning("Excelフォーマットをアップロードすると、直接ファイルに書き込めます。")
+        st.warning("⚠️ サイドバーでExcelフォーマットをアップロードすると、直接ファイルに書き込めます。")
