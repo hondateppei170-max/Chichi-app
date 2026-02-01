@@ -9,30 +9,20 @@ from PIL import Image
 # ==========================================
 # 【重要】過去の感想文データ（文体学習用）
 # ここにあなたの過去の感想文をコピペしてください。
-# AIはこの文章の「書き出し」「熱量」「言葉選び」を真似します。
 # ==========================================
 PAST_REVIEWS = """
-（例：以前の感想文1）
-今月の致知を読んで、特に「逆境こそが人を育てる」という言葉が胸に刺さりました。
-日々の税理士補助業務において、繁忙期にはつい愚痴が出そうになりますが、
-それは自分の魂を磨く砥石なのだと気づかされました。
-お客様の試算表を作る作業一つとっても、そこに魂を込めること。
-それがプロフェッショナルとしての流儀だと感じます。
-
-（例：以前の感想文2）
-「一隅を照らす」という教えに、ハッとさせられました。
-私はまだ大きな仕事は任されていませんが、コピー取りや掃除といった
-足元の業務をおろそかにしていては、信頼は築けないと痛感しました。
-明日からの巡回監査では、まず元気な挨拶から実践し、
-お客様に元気をお届けできる存在になりたいと強く思います。
+（ここに過去の感想文を貼り付けてください。
+例：
+致知を読んで、～という言葉に感銘を受けました。
+日々の税理士業務の中で、～）
 """
 
 # ==========================================
 # ページ設定
 # ==========================================
-st.set_page_config(page_title="致知読書感想文アプリ v2", layout="wide", page_icon="📖")
-st.title("📖 致知読書感想文作成アプリ (壁打ち機能付き)")
-st.caption("OCR(Gemini 3) → 執筆(GPT-4o) → 壁打ちで深掘り → Excel出力")
+st.set_page_config(page_title="致知読書感想文アプリ v2.1", layout="wide", page_icon="📖")
+st.title("📖 致知読書感想文作成アプリ (Gemini 3 + 壁打ち機能)")
+st.caption("Step 1: OCR (3記事対応) → Step 2: 執筆 & 壁打ち → Step 3: Excel出力")
 
 # Excel書き込み設定（A9セルから40文字ずつ）
 EXCEL_START_ROW = 9
@@ -62,11 +52,11 @@ except Exception as e:
 # セッション状態の初期化
 # ==========================================
 if "extracted_text" not in st.session_state:
-    st.session_state.extracted_text = ""  # OCR結果
+    st.session_state.extracted_text = ""
 if "current_draft" not in st.session_state:
-    st.session_state.current_draft = ""   # 現在の感想文ドラフト
+    st.session_state.current_draft = ""
 if "chat_history" not in st.session_state:
-    st.session_state.chat_history = []    # 壁打ちチャット履歴
+    st.session_state.chat_history = []
 
 # ==========================================
 # 関数定義
@@ -75,13 +65,12 @@ def split_text(text, chunk_size):
     """Excel用にテキストを指定文字数で分割"""
     if not text:
         return []
-    clean_text = text.replace('\n', '　') # 改行は全角スペースに置換
+    clean_text = text.replace('\n', '　')
     return [clean_text[i:i+chunk_size] for i in range(0, len(clean_text), chunk_size)]
 
 def generate_draft(ocr_text, chat_context, target_len):
-    """感想文を生成する関数（初回＆リライト共通）"""
+    """感想文を生成する関数"""
     
-    # 過去の文体 + チャットでの追加情報をプロンプトに組み込む
     system_prompt = (
         "あなたは税理士事務所の職員です。\n"
         "これから雑誌『致知』の読書感想文（社内木鶏会用）を作成します。\n"
@@ -121,37 +110,45 @@ with st.sidebar:
     st.markdown("---")
     model_id_input = st.text_input("GeminiモデルID", value="gemini-3-flash-preview")
     
-    # リセットボタン
     if st.button("🗑️ 全データをリセット"):
         for key in st.session_state.keys():
             del st.session_state[key]
         st.rerun()
 
 # ==========================================
-# メイン画面構成
+# メイン画面構成 (タブ分け)
 # ==========================================
-tab1, tab2, tab3 = st.tabs(["1️⃣ 画像解析 (OCR)", "2️⃣ 執筆 & 壁打ち (Chat)", "3️⃣ Excel出力"])
+tab1, tab2, tab3 = st.tabs(["1️⃣ 画像解析 (OCR)", "2️⃣ 執筆 & 壁打ち", "3️⃣ Excel出力"])
 
 # ------------------------------------------------------------------
 # Tab 1: OCR処理 (Gemini 3 Flash)
 # ------------------------------------------------------------------
 with tab1:
     st.subheader("Step 1. 記事画像の読み込み")
-    st.info("Gemini 3 Flash を使用して、縦書き・段組みを正確に読み取ります。")
-    
-    col1, col2 = st.columns(2)
-    with col1:
-        files_main = st.file_uploader("メイン記事", type=['png', 'jpg', 'jpeg', 'webp'], accept_multiple_files=True)
-    with col2:
-        files_sub = st.file_uploader("サブ記事（任意）", type=['png', 'jpg', 'jpeg', 'webp'], accept_multiple_files=True)
+    st.info("メイン記事、記事2、記事3の画像をそれぞれアップロードしてください。")
 
-    if st.button("🔍 解析開始", type="primary"):
-        if not files_main:
-            st.error("メイン記事の画像を選択してください。")
-        else:
-            with st.spinner(f"Gemini ({model_id_input}) が解析中..."):
+    # 3つのアップロードエリアを作成
+    ocr_tab1, ocr_tab2, ocr_tab3 = st.tabs(["📂 メイン記事", "📂 記事2", "📂 記事3"])
+    
+    files_dict = {}
+    with ocr_tab1:
+        files_dict["main"] = st.file_uploader("メイン記事の画像", type=['png', 'jpg', 'jpeg', 'webp'], accept_multiple_files=True, key="u1")
+    with ocr_tab2:
+        files_dict["sub1"] = st.file_uploader("記事2の画像", type=['png', 'jpg', 'jpeg', 'webp'], accept_multiple_files=True, key="u2")
+    with ocr_tab3:
+        files_dict["sub2"] = st.file_uploader("記事3の画像", type=['png', 'jpg', 'jpeg', 'webp'], accept_multiple_files=True, key="u3")
+
+    # 画像があるか確認
+    total_files = sum([len(f) for f in files_dict.values() if f])
+
+    if total_files > 0:
+        st.write(f"📁 合計 {total_files}枚の画像が選択されています。")
+        
+        if st.button("🔍 全画像を解析する (OCR)", type="primary"):
+            with st.spinner(f"Gemini ({model_id_input}) が画像を読み込んでいます..."):
                 try:
                     gemini_inputs = []
+                    
                     # プロンプト（読み順の厳格な指定）
                     system_prompt_text = (
                         "あなたは、雑誌『致知』の紙面を完璧に読み取る高精度OCRエンジンです。\n"
@@ -160,16 +157,32 @@ with tab1:
                         "2. まず【上段】を右から左へ読む。\n"
                         "3. 次に【下段】を右から左へ読む。\n"
                         "※左段を上から下へ一気に読まないこと。\n\n"
-                        "出力は [画像N枚目] <上段>... <下段>... のタグを付けてください。"
+                        "出力は [ファイル名] <上段>... <下段>... のタグを付けてください。"
                     )
                     gemini_inputs.append(system_prompt_text)
+
+                    # 画像処理と追加
+                    # 順番: メイン -> 記事2 -> 記事3
+                    if files_dict["main"]:
+                        gemini_inputs.append("\n\n=== 【ここからメイン記事】 ===\n")
+                        for img_file in files_dict["main"]:
+                            img_file.seek(0)
+                            image = Image.open(img_file).convert("RGB")
+                            gemini_inputs.append(image)
                     
-                    # 画像処理
-                    all_files = files_main + (files_sub if files_sub else [])
-                    for img_file in all_files:
-                        img_file.seek(0)
-                        image = Image.open(img_file).convert("RGB")
-                        gemini_inputs.append(image)
+                    if files_dict["sub1"]:
+                        gemini_inputs.append("\n\n=== 【ここから記事2】 ===\n")
+                        for img_file in files_dict["sub1"]:
+                            img_file.seek(0)
+                            image = Image.open(img_file).convert("RGB")
+                            gemini_inputs.append(image)
+
+                    if files_dict["sub2"]:
+                        gemini_inputs.append("\n\n=== 【ここから記事3】 ===\n")
+                        for img_file in files_dict["sub2"]:
+                            img_file.seek(0)
+                            image = Image.open(img_file).convert("RGB")
+                            gemini_inputs.append(image)
 
                     # Gemini呼び出し
                     model = genai.GenerativeModel(model_id_input)
@@ -196,14 +209,12 @@ with tab1:
 with tab2:
     st.subheader("Step 2. 感想文の執筆とブラッシュアップ")
     
-    # レイアウト: 左側が感想文ドラフト、右側が壁打ちチャット
     col_draft, col_chat = st.columns([1, 1])
 
     # --- 左側：感想文表示エリア ---
     with col_draft:
         st.markdown("### 📝 感想文ドラフト")
         
-        # 初回生成ボタン
         if not st.session_state.current_draft:
             if st.button("🚀 初稿を作成する"):
                 if not st.session_state.extracted_text:
@@ -212,21 +223,18 @@ with tab2:
                     with st.spinner("過去の文体を分析して執筆中..."):
                         draft = generate_draft(st.session_state.extracted_text, "", target_length)
                         st.session_state.current_draft = draft
-                        # 初回生成時にチャットのきっかけメッセージを入れる
                         st.session_state.chat_history.append({
                             "role": "assistant", 
-                            "content": "初稿を作成しました！\nよりあなたらしい感想文にするために、少し質問させてください。\n\nこの記事の中で、ご自身の最近の業務（失敗談や成功体験）と重なる部分はありましたか？"
+                            "content": "初稿を作成しました！\nよりあなたらしい感想文にするために、この記事のテーマに関連した、最近の業務上の出来事があれば教えてください。"
                         })
                         st.rerun()
         
-        # ドラフトがある場合、表示
         if st.session_state.current_draft:
             st.text_area("現在の原稿", st.session_state.current_draft, height=600, key="draft_area")
             
             st.info("👈 右側のチャットでエピソードを追加し、下のボタンで書き直せます。")
             if st.button("🔄 チャットの内容を反映して書き直す", type="primary"):
                 with st.spinner("会話内容を反映してリライト中..."):
-                    # チャット履歴をテキスト化
                     chat_context = "\n".join([f"{m['role']}: {m['content']}" for m in st.session_state.chat_history])
                     new_draft = generate_draft(st.session_state.extracted_text, chat_context, target_length)
                     st.session_state.current_draft = new_draft
@@ -236,31 +244,22 @@ with tab2:
     # --- 右側：壁打ちチャットエリア ---
     with col_chat:
         st.markdown("### 💬 壁打ち (思考の深掘り)")
-        st.caption("AIがあなたの専属編集者として質問します。答えることで、感想文に独自性が生まれます。")
-
-        # チャットコンテナ
         chat_container = st.container(height=500)
         
-        # 履歴の表示
         for message in st.session_state.chat_history:
             with chat_container.chat_message(message["role"]):
                 st.markdown(message["content"])
 
-        # ユーザー入力
         if prompt := st.chat_input("エピソードや考えを入力..."):
-            # ユーザーのメッセージを追加
             st.session_state.chat_history.append({"role": "user", "content": prompt})
             with chat_container.chat_message("user"):
                 st.markdown(prompt)
 
-            # AIの返答（編集者モード）
             with chat_container.chat_message("assistant"):
                 with st.spinner("考え中..."):
-                    # チャット用プロンプト
                     chat_system = (
-                        "あなたは、ユーザーの読書感想文をより良いものにするための『専属編集者』です。\n"
-                        "ユーザーの発言を受け止め、さらに深いエピソード（具体的な業務での失敗、喜び、気づきなど）を引き出す質問を投げかけてください。\n"
-                        "決して感想文そのものをここでは書かず、あくまでインタビューに徹してください。"
+                        "あなたは編集者です。ユーザーの感想文をより具体的にするため、"
+                        "業務経験や感情を深掘りする質問をしてください。"
                     )
                     chat_messages = [{"role": "system", "content": chat_system}] + \
                                     [{"role": m["role"], "content": m["content"]} for m in st.session_state.chat_history]
@@ -291,24 +290,19 @@ with tab3:
             if st.button("📥 Excelを作成してダウンロード"):
                 try:
                     wb = load_workbook(uploaded_template)
-                    ws = wb.active # アクティブシート（1枚目）を対象
+                    ws = wb.active
                     
-                    # 以前の内容をクリア（A9以降）
                     for row in range(EXCEL_START_ROW, 100):
                         ws[f"A{row}"].value = None
                     
-                    # 40文字区切りでリスト化
                     lines = split_text(st.session_state.current_draft, CHARS_PER_LINE)
                     
-                    # A9セルから順に書き込み
                     for i, line in enumerate(lines):
                         current_row = EXCEL_START_ROW + i
                         cell = ws[f"A{current_row}"]
                         cell.value = line
-                        # 書式設定（折り返さない、縮小しない、左寄せ）
                         cell.alignment = Alignment(wrap_text=False, shrink_to_fit=False, horizontal='left')
                     
-                    # バッファに保存
                     out = io.BytesIO()
                     wb.save(out)
                     out.seek(0)
